@@ -156,35 +156,34 @@ with dai.Device(pipeline) as device:
         # frame = (frame * (255 / depth.initialConfig.getMaxDisparity())).astype(np.uint8)
         depthCalc = (433.333333 * 7.5   / frame ).astype(np.uint8) #
         
-        depthCalc = depthCalc 
+        depthCalc = depthCalc * 1 #messing with multiplication got rid of weird lines outside of FOV, still problems with it inside
         # depthCalc = cv2.fastNlMeansDenoisingColored(depthCalc,None,10,10,7,21)
         
-        projectionDistance = depthCalc
-        relativeDistFromCamera = depthCalc
-        relativePerpendicularFromCamera = depthCalc * np.tan(horizontalTheta) #cms
+        relativeDistFromCamera = depthCalc #how far away from camera
+        relativePerpendicularFromCamera = depthCalc * np.tan(horizontalTheta) #how much to the side
 
 
-        scale = 3
-        newMap = np.zeros((480 * 2,640 * 2))
+        scale = 3 #how much to scale on birds eye view image
+        newMap = np.zeros((480 * 2,640 * 2)) 
         newX = relativeDistFromCamera * scale
-        newY =  (relativePerpendicularFromCamera  * scale) + 480
+        newY =  (relativePerpendicularFromCamera  * scale) + 480 #480 *2/2, puts camera on the left side of image, centered on y-axis
         
         
-        distance = np.sqrt(relativeDistFromCamera * relativeDistFromCamera + relativePerpendicularFromCamera * relativePerpendicularFromCamera)
-        height = np.abs(distance * np.tan(verticalTheta))
+        distance = np.sqrt(relativeDistFromCamera * relativeDistFromCamera + relativePerpendicularFromCamera * relativePerpendicularFromCamera) #distance from camera focal point
+        height = np.abs(distance * np.tan(verticalTheta)) #height relative to camera (offset to the y axis)
 
         # newX[height > 0.15 ] = 0 #3 feet = ~95 cm
         # newY[height > 0.15 ] = 0 
         
-        newX[depthCalc == 0] = 0
+        newX[depthCalc == 0] = 0 
         newY[depthCalc == 0] = 0
         
         
-        newX = np.round(newX).flatten().astype(int)
-        newY = np.round(newY).flatten().astype(int)
+        newX = np.round(newX).flatten().astype(int) #converts 2d array of newX cordinates to a flattened one
+        newY = np.round(newY).flatten().astype(int) #^^^
         print(np.unique(newX))
 
-        newMap[newY, newX] = 1
+        newMap[newY, newX] = 1 #if something was detected, set this pixel to white
         
         cv2.imshow("field layout", newMap)
 
