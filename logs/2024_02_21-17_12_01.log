@@ -1,0 +1,12 @@
+2024-02-21 17:12:01,308: INFO: USB not detected, saving locally
+2024-02-21 17:12:01,308: INFO: DepthAI Script Running (Logging started properly)
+2024-02-21 17:12:01,308: INFO: Connecting to network table
+2024-02-21 17:12:01,320: INFO: starting network client
+2024-02-21 17:12:01,320: INFO: Connected
+2024-02-21 17:12:01,320: INFO: Updated connected status
+2024-02-21 17:12:01,320: INFO: Enabling Camera Stream logging
+2024-02-21 17:12:01,321: INFO: Enabled
+2024-02-21 17:12:01,337: INFO: Opening field map at: c:\Users\pavel\Documents\CodingStuff\Robotics-AStarPathFinding\2024-field_binary.png
+2024-02-21 17:12:01,337: DEBUG: serve_Depth Camera: waiting for clients to connect
+2024-02-21 17:12:01,431: INFO: Starting depth camera
+2024-02-21 17:12:01,474: INFO: Starting pipeline

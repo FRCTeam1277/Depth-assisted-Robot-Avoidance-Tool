@@ -6,7 +6,8 @@ import numpy as np
 # import rerun as rr
 from scipy import ndimage
 from scipy.ndimage.filters import gaussian_filter
-
+import logging
+logger = logging.getLogger()
 class DepthCamera:
     def __init__(self, depthCameraConfig):
         self._birdsEyeViewMap = []
@@ -125,8 +126,12 @@ class DepthCameraProcessing:
         self.lensLength = (3*1e-9 * 640, 3*1e-9 * 480)
         self.horizontalPixelLoc = (np.indices((480,640))[1] - 320 * np.ones((480,640))) * 3e-6 
         self.horizontalTheta = np.arctan(self.horizontalPixelLoc / self.focalLength)
+        self.tanHorizontalTheta = np.tan(self.horizontalTheta) #ok ... don't judge, don't want to risk breaking anything
+        self.tanHorizontalThetaSquared = self.tanHorizontalTheta * self.tanHorizontalTheta 
+        self.normalDistance = np.sqrt(1+ self.tanHorizontalThetaSquared)
         self.verticalPixelLoc = -1 * (np.indices((480,640))[0] - 240 * np.ones((480,640))) * 3e-6 
         self.verticalTheta =  np.arctan(self.verticalPixelLoc/np.sqrt(self.horizontalPixelLoc * self.horizontalPixelLoc + self.focalLength * self.focalLength))
+        self.tanVerticalTheta = np.tan(self.verticalTheta)
         
         self.bufferSize = 5
         self._bufferIndex = 0
@@ -139,33 +144,32 @@ class DepthCameraProcessing:
         scaleX = depthCameraConfig.metersToPixelScaleX    #how much to scale on birds eye view image
         scaleY = depthCameraConfig.metersToPixelScaleY    #how much to scale on birds eye view image
 
-                
+        logger.info("before distance")
         relativeDistFromCamera = depthCalc #how far away from camera
-        relativePerpendicularFromCamera = depthCalc * np.tan(self.horizontalTheta) #how much to the side
-        distance = np.sqrt((relativeDistFromCamera * relativeDistFromCamera) + (relativePerpendicularFromCamera * relativePerpendicularFromCamera)) #distance from camera focal point
-        depthCalc[depthCalc > 4] = gaussian_filter(depthCalc[depthCalc > 4], sigma=3)
+        relativePerpendicularFromCamera = depthCalc * self.tanHorizontalTheta #how much to the side
+        distance = depthCalc * self.normalDistance  #np.sqrt((relativeDistFromCamera * relativeDistFromCamera) + (relativePerpendicularFromCamera * relativePerpendicularFromCamera)) #distance from camera focal point
+        logger.info("after distance")
 
+        depthCalc[depthCalc > 4] = 0  #gaussian_filter(depthCalc[depthCalc > 4], sigma=3)
 
-        newMap = np.zeros((480,640)) 
+        newMap = np.empty((480,640)) 
         newX = relativeDistFromCamera 
         newY =  (relativePerpendicularFromCamera ) + 240/scaleY #+480/scale puts on the left side center
-        
-        
-        height =  distance * np.tan(self.verticalTheta) #height relative to camera (offset to the y axis)
+
+        height =  distance * self.tanVerticalTheta #height relative to camera (offset to the y axis)
 
         newX[height > 1- heightFromFloor ] = 0 #removes floor and ceiling from birdseye view
         newY[height > 1 - heightFromFloor ] = 0 
         newX[height < -heightFromFloor ] = 0 
         newY[height < -heightFromFloor ] = 0 
+
+        logger.info("before ruound")
+        newX = (newX.ravel() * scaleX).astype(np.int32)
+        newY = (newY.ravel() * scaleY).astype(np.int32)
         
-        # inbetweenDetector = np.unique(relativeDistFromCamera)
-        
-        
-        newX[depthCalc == 0] = 0 
-        newY[depthCalc == 0] = 0
-        
-        newX = np.round(newX * scaleX).flatten().astype(int) #converts 2d array of newX cordinates to a 1D array, used to tranverse the newMap array one
-        newY = np.round(newY * scaleY).flatten().astype(int) #^^^
+        #newX = np.round(newX * scaleX).ravel().astype(np.int32) #converts 2d array of newX cordinates to a 1D array, used to tranverse the newMap array one
+        #newY = np.round(newY * scaleY).ravel().astype(np.int32) #^^^
+        logger.info("after ruound")
         
         newX[newX < 0 ] = 0
         newX[newX >= 640] = 0
@@ -173,6 +177,7 @@ class DepthCameraProcessing:
         newY[newY < 0] = 0
         
         newMap[newY, newX] = 1 #if something was detected, set this pixel to white
+        
         return newMap
 
     def addToBuffer(self, newImage):

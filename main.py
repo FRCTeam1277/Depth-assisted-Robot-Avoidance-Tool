@@ -3,12 +3,12 @@ import numpy as np
 from scipy import ndimage 
 from cscore import CameraServer
 import depthai as dai
-import time
 import robotDetection as rd
 import logging 
 import datetime
 from pathlib import Path
 import ntcore
+import AStar
 
 currentTime = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
 logger = logging.getLogger()
@@ -17,7 +17,7 @@ try:
                 format='%(asctime)s: %(levelname)s: %(message)s', 
                 level=logging.DEBUG) 
 except:
-    logging.basicConfig(filename="logs/" + currentTime + ".log", 
+    logging.basicConfig(filename="/home/hoot/Robotics-AStarPathFinding/logs/" + currentTime + ".log", 
                     format='%(asctime)s: %(levelname)s: %(message)s', 
                     level=logging.DEBUG) 
     logger.info("USB not detected, saving locally")
@@ -97,93 +97,70 @@ def feetToMeters(cord):
         newTuple.append(i /3.281) 
     return tuple(newTuple)
 
-def dist(start, end):
-    return np.power((start[0] - end[0])**2 + (start[1]-end[1])**2, 0.5)
-    
-
-def reconstructPath(came_from, current_node):
-    print("HERE")
-    total_path = [current_node]
-    while current_node in came_from:
-        current_node = came_from[current_node]
-        total_path.append(current_node)
-    return total_path
-    
-def getNeighboringTuples(node, binaryImage):
-    neighboringTuples = []
-    for i in [-discreteGrid,0,discreteGrid]:
-        for j in [-discreteGrid,0,discreteGrid]:
-            if i != 0 or j != 0:
-                new_node = (node[0] + i, node[1] + j)
-                if binaryImage[convertToImageCordinate(new_node)] == 0:
-                    neighboringTuples.append(new_node)
-    return neighboringTuples
-
-def convertToImageCordinate(cord):
-    return (cord[1], cord[0])
-
-def AStar(start, end, binaryImg):
-    refreshIndex = 0
-    refreshRate = 10 #HZ
-    binaryImage = binaryImg
-    open_nodes = [start]
-    came_from = {}
-    gScore = {}
-    gScore[start] = 0
-    fScore = {}
-    fScore[start] = dist(start, end)
-    
-    while open_nodes != []:
-        current_node = min(open_nodes, key = lambda y: fScore.get(y,1e99))
-        if dist(current_node, end) < discreteGrid:
-            return reconstructPath(came_from, current_node)
-        open_nodes.remove(current_node)
-        neighboring_nodes = getNeighboringTuples(current_node, binaryImage)
-        for neighbor in neighboring_nodes:
-            tentative_gScore = gScore.get(current_node, 1e99) + dist(current_node, neighbor)
-            if tentative_gScore < gScore.get(neighbor,1e99):
-                came_from[neighbor] = current_node
-                gScore[neighbor] = tentative_gScore
-                fScore[neighbor] = tentative_gScore + dist(neighbor,end)
-                if neighbor not in open_nodes:
-                    open_nodes.append(neighbor)
-
-
-    return "FAILED"
-
-def runAStar():
-    print(AStar(robotStartPosPixel,robotEndPosPixel))
-
-
+imgSize = np.asarray(img.shape[::-1])
 fieldSize = img_config["field-size"]
 fieldSizeMeters = feetToMeters(fieldSize)
 
-topLeftFieldPixels = img_config["top-left"] #pixels
-bottomRightFieldPixels = img_config["bottom-right"] #pixels
+topLeftFieldPixels = np.asarray(img_config["top-left"]) * scale#pixels
+bottomRightFieldPixels = np.asarray(img_config["bottom-right"]) * scale#pixels
 
 fieldInPixels = (bottomRightFieldPixels[0] - topLeftFieldPixels[0],bottomRightFieldPixels[1] - topLeftFieldPixels[1])
 
 bottomLeftFieldMeters = ((fieldSizeMeters[0] * topLeftFieldPixels[0]/fieldInPixels[0]), (fieldSizeMeters[1] * bottomRightFieldPixels[1]/fieldInPixels[1]))
 
 metersToPixelScale = (fieldInPixels[0]/fieldSizeMeters[0],fieldInPixels[1]/fieldSizeMeters[1])
-
+imgSizeMeters = imgSize / metersToPixelScale
+print("Image size meters")
+print(imgSizeMeters)
 def convertRobotPoseToPixel(pos):
     print(bottomLeftFieldMeters)
     #use top left and right, as well as image size, to determine locations
-    pos = (pos[0] + bottomLeftFieldMeters[0],  fieldSizeMeters[1] + (fieldSizeMeters[1] - (pos[1] +  bottomLeftFieldMeters[1])))
-    pixelPosition = ( int(np.round(scale * fieldInPixels[0] *  pos[0]/fieldSizeMeters[0])), int(np.round(scale * fieldInPixels[1] * pos[1]/fieldSizeMeters[1])))
+    pos = (pos[0] + bottomLeftFieldMeters[0],  imgSizeMeters[1] + (fieldSizeMeters[1] - (pos[1] +  bottomLeftFieldMeters[1])))
+    pixelPosition = ( int(np.round(fieldInPixels[0] *  pos[0]/fieldSizeMeters[0])), int(np.round(fieldInPixels[1] * pos[1]/fieldSizeMeters[1])))
     return pixelPosition
 
 def convertPixelToRobotPose(pos):
-    robotPosOffset = (pos[0] * fieldSizeMeters[0]/(fieldInPixels[0] * scale), pos[1] * fieldSizeMeters[1]/(fieldInPixels[1] * scale))
-    robotPosOffset = (pos[0] * fieldSizeMeters[0]/(fieldInPixels[0] * scale), pos[1] * fieldSizeMeters[1]/(fieldInPixels[1] * scale))
-    
+    logger.info(pos)
+    robotPosOffset = pos *  np.array([fieldSizeMeters[0]/(fieldInPixels[0] ), fieldSizeMeters[1]/(fieldInPixels[1])])
+    robotPosOffset = robotPosOffset *  np.array([1,-1])
+    robotPos = robotPosOffset +  np.array([-bottomLeftFieldMeters[0], imgSizeMeters[1] + fieldSizeMeters[1] - bottomLeftFieldMeters[1]])
+    return robotPos
+
+#https://stackoverflow.com/questions/24318078/is-there-a-faster-way-to-rotate-a-large-rgba-image-than-scipy-interpolate-rotate
+def rotate_CV(image, angel , interpolation):
+
+    '''
+        input :
+        image           :  image                    : ndarray
+        angel           :  rotation angel           : int
+        interpolation   :  interpolation mode       : cv2 Interpolation object
+        
+                                                        Interpolation modes :
+                                                        interpolation cv2.INTER_CUBIC (slow) & cv2.INTER_LINEAR
+                                                        https://theailearner.com/2018/11/15/image-interpolation-using-opencv-python/
+                                                        
+        returns : 
+        rotated image   : ndarray
+        
+        '''
+
+
+
+    #in OpenCV we need to form the tranformation matrix and apply affine calculations
+    #
+    h,w = image.shape[:2]
+    cX,cY = (w//2,h//2)
+    M = cv2.getRotationMatrix2D((cX,cY),angel,1)
+    rotated = cv2.warpAffine(image,M , (w,h),flags=interpolation)
+    return rotated
+
 
 def runCamera(sharedCamera):
 
     sharedCamera.startDepthCamera(depthCameraConfig)
     sharedCamera.runCamera(depthCameraProcessing,depthCameraConfig)
     
+row, col = np.indices(img.shape)
 
 if __name__ == "__main__":
     logger.info("Starting depth camera")
@@ -197,9 +174,11 @@ if __name__ == "__main__":
     
     robotStartPosPixel = convertRobotPoseToPixel((1,2))
     robotEndPosPixel = convertRobotPoseToPixel((15,7))
-    kernel = np.ones((15, 15), np.uint8) 
+    kernel = np.ones((25, 25), np.uint8) #approx half the robot 
+    kernel2 = np.ones((3,3), np.uint8)
     testImage = displayImg.copy()
-    testImage = cv2.dilate(testImage, kernel, iterations= 1)
+    testImage = cv2.dilate(testImage, kernel, iterations= 2)
+    img = cv2.dilate(img, kernel, iterations=1)
     
     # logger.info("Waiting for roborio connection")
     # clientsocket, address = s.accept()
@@ -214,31 +193,46 @@ if __name__ == "__main__":
         q2 = device.getOutputQueue(name="depth", maxSize=1, blocking=False)
 
         passiveMode = depthTable.getBooleanTopic("passive").subscribe(False)
+        passiveModeOn = False
         passiveTopic = depthTable.getRawTopic("passive-data").publish("byte array")
         
-        runCommandSub = depthTable.getBooleanTopic("Calculate Trajectory").subscribe(False)
-        runCommandSet = depthTable.getBooleanTopic("Calculate Trajectory").publish()
+        runCommandSub = depthTable.getBooleanTopic("Trajectory Request").subscribe(False)
+        runCommandSet = depthTable.getBooleanTopic("Trajectory Request").publish()
+        runEndPosSub = depthTable.getDoubleArrayTopic("Trajectory End Point").subscribe([0,0,0])
         
-        resultStream = depthTable.getRawTopic("Trajectory").publish("byte array")
+        informFinishedCommandSet = depthTable.getBooleanTopic("Trajectory Request Fulfilled").publish()
+        
+        resultStream = depthTable.getDoubleArrayTopic("Trajectory Data").publish()
+        robotPositionSub = robotTable.getDoubleArrayTopic("Position").subscribe([0.0,0.0,0.0])
         # commandStream
+
+        updateIteration = 0
 
         logger.info("Starting camera stream")
         while True:
             inDepth = q2.get()
             depthFrame = inDepth.getFrame() #gets numpy array of depths per each pixel
-
+            logger.info("Line 229, processing frame")
             newMap = depthCameraProcessing.processDepthFrame(depthFrame, depthCameraConfig)
-              
+            logger.info("Line 231, got processed frame, adding to buffer")
+
             depthCameraProcessing.addToBuffer(newMap)
+            logger.info("Line 234, Added to buffer, getting frame collective")
             finalMap = depthCameraProcessing.getGuaranteedDepth()
             # finalMap = ndimage.binary_dilation(finalMap, iterations=1).astype(finalMap.dtype)
 
+            updateIteration +=1
+            if updateIteration > 10:
+                updateIteration = 0
+                passiveModeOn = passiveMode.get()
+                
             logger.info("Ran Loop Iteration")
-            if passiveMode.get() == True:
+            if passiveModeOn== True:
                 # imgFinalMap = cv2.cvtColor(finalMap.astype('float32'),cv2.COLOR_GRAY2BGR)
                 finalMap *= 255
-                logger.info(np.unique(finalMap))
                 output.putFrame(finalMap )
+                logger.info("sent image to camera server")
+
             # socket_info = clientsocket.recv(1024).decode("utf-8")
             # command = socket_info.strip().replace("\x00\x0f","").split(" ")
             # print(command)
@@ -246,30 +240,31 @@ if __name__ == "__main__":
             #format: "RUN ROBOTPOSX ROBOTPOSY HEADING"
             if runCommandSub.get() == True:
                 runCommandSet.set(False)
+                informFinishedCommandSet.set(False)
                 logger.info("Fetching depth camera data")
-                startTime = datetime.now() #used to see time it takes to run
-                robotPos = robotTable.getEntry("Position") #posx, posy, angle
+                robotPos = robotPositionSub.get() #posx, posy, angle
+                endPos = runEndPosSub.get()
+                logger.info("Current robot position: " + str(robotPos))
+
                 angle = robotPos[2]
                 original_angle = 180
-                finalMap = ndimage.rotate(finalMap, angle)
-                print(finalMap.shape)
+                finalMap = rotate_CV(finalMap, angle, cv2.INTER_LINEAR)
                 maxSize = 640
                 camX = np.floor(np.cos((original_angle+angle) * np.pi/180) * maxSize/2) + finalMap.shape[1]//2
                 camY = -np.floor(np.sin((original_angle+angle) * np.pi/180) * maxSize/2) + finalMap.shape[0]//2
                 camX = int(camX)
                 camY = int(camY)
-                print((camX,camY))
-                cv2.circle(finalMap, (camX,camY), 5, 255)
-                
-                row, col = np.indices(img.shape)
+                # cv2.circle(finalMap, (camX,camY), 5, 255)
+                logger.info("Got cam pos")
                 
                 robotStartPosPixel = (robotPos[0],robotPos[1])
-                print(robotStartPosPixel)
+                robotStartPosPixel = convertRobotPoseToPixel(robotStartPosPixel)
+                robotEndPosPixel = (endPos[0], endPos[1])
+                robotEndPosPixel = convertRobotPoseToPixel(robotEndPosPixel)
                 rowShifted = row - robotStartPosPixel[1] + camY
                 colShifted = col - robotStartPosPixel[0] + camX #robotStartPosPixel[1] 
                 rowShifted = rowShifted.astype('int32')
                 colShifted = colShifted.astype('int32')
-                print(rowShifted)
                 rowShifted[rowShifted >= finalMap.shape[0]] = 0
                 colShifted[colShifted >= finalMap.shape[1]] = 0
                 rowShifted[rowShifted <= 0] = 0
@@ -277,24 +272,39 @@ if __name__ == "__main__":
                 rowShifted[colShifted <= 0] = 0
                 colShifted[rowShifted <= 0] = 0
                 finalMap[0,0] = 0
+                finalMap = cv2.dilate(finalMap, kernel2, iterations=1).astype(finalMap.dtype)
+                logger.info("Got final map")
+                
                 
                 newImg = img + finalMap[rowShifted,colShifted]
                 newImg[newImg > 0.5] = 255
                 newImg[newImg < 0.5] = 0
 
                 # coloredImg = cv2.cvtColor(newImg.astype('float32'),cv2.COLOR_GRAY2BGR)
-                newImg = ndimage.binary_dilation(newImg, iterations=2).astype(finalMap.dtype)
-                result = AStar(robotStartPosPixel,robotEndPosPixel,newImg)
+                
+                logger.info("Starting ASTAR")
+                logger.info("Robot start pos: " + str(robotStartPosPixel))
+                logger.info("Robot end pos: " + str(robotEndPosPixel))
+
+                output.putFrame(newImg)
+                result = AStar.AStar(robotStartPosPixel,robotEndPosPixel,newImg)
                 # for i in range(len(result) -1):
                 #     # displayImg[convertToImageCordinate(result[i])] = (255,0,255)
                 #     line = cv2.line(coloredImg, result[i], result[i+1], (255,0,255), 2)
                 
+                
                 logger.info("Sending results")
                 logger.debug(result)
-                resultStream.setRaw("Trajectory", str(result), "utf-8")
-
-                endTime = datetime.now() #used to see time it takes to run
-                logger.info("Finished run, took ", endTime-startTime)
+                finalResult = []
+                if result != "FAILED":
+                    result = np.array(result).astype(np.float64)
+                    result = np.flip(result,0) #because AStar reconstruction starts from the end to the start, flip array to be start to end
+                    result = convertPixelToRobotPose(result)
+                    finalResult = list(result.ravel())
+                
+                resultStream.set(finalResult)
+                informFinishedCommandSet.set(True)
+                logger.info("Finished run")
     # sys.stdout.close()
             
         
