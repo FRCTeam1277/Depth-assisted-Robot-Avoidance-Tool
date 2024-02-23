@@ -35,7 +35,7 @@ robotTable = inst.getTable("SmartDashboard")
 inst.startClient4("depth client")
 inst.setServerTeam(1277)
 logger.info("Connected")
-connectedBool = depthTable.getBooleanTopic("Depth Camera Connected").publish()
+connectedBool = depthTable.getBooleanTopic("Depth Raspberry PI Connected").publish()
 connectedBool.set(True)
 logger.info("Updated connected status")
 
@@ -110,8 +110,6 @@ bottomLeftFieldMeters = ((fieldSizeMeters[0] * topLeftFieldPixels[0]/fieldInPixe
 
 metersToPixelScale = (fieldInPixels[0]/fieldSizeMeters[0],fieldInPixels[1]/fieldSizeMeters[1])
 imgSizeMeters = imgSize / metersToPixelScale
-print("Image size meters")
-print(imgSizeMeters)
 def convertRobotPoseToPixel(pos):
     print(bottomLeftFieldMeters)
     #use top left and right, as well as image size, to determine locations
@@ -162,12 +160,19 @@ def runCamera(sharedCamera):
     
 row, col = np.indices(img.shape)
 
+isDepthCameraConnected = False
+
 if __name__ == "__main__":
     logger.info("Starting depth camera")
-    depthCameraConfig = rd.DepthCameraConfig()
-    depthCamera = rd.DepthCamera(depthCameraConfig)
-    depthCameraProcessing = rd.DepthCameraProcessing()
-    depthCamera.startDepthCamera(depthCameraConfig)
+    try:
+        depthCameraConfig = rd.DepthCameraConfig()
+        depthCamera = rd.DepthCamera(depthCameraConfig)
+        depthCameraProcessing = rd.DepthCameraProcessing()
+        depthCamera.startDepthCamera(depthCameraConfig)
+        isDepthCameraConnected = True
+    except:
+        isDepthCameraConnected = False
+    
     
  
     # sharedCamera = depthCamera('c', rd.DepthCamera)
@@ -185,31 +190,44 @@ if __name__ == "__main__":
     # logger.info("Connections established at " + str(address))  
     # time.sleep(1)
 
-    logger.info("Starting pipeline")
-    with dai.Device(depthCamera.pipeline) as device:
+    logger.info("Starting depth pipeline")
+    if isDepthCameraConnected:
+        try:
+            device = dai.Device(depthCamera.pipeline)
+        except:
+            isDepthCameraConnected = False
+    
+    if isDepthCameraConnected:
+        logger.info("Depth Camera Detected and running smoothly!")
+    else:
+        logger.info("No depth camera detected, rerun script (limited functionality for AStar without depth input)")
 
-        # Output queue will be used to get the disparity frames from the outputs defined above
+    depthCameraConnected = depthTable.getBooleanTopic("depth-camera-connected").publish()
+    depthCameraConnected.set(isDepthCameraConnected)
+    # Output queue will be used to get the disparity frames from the outputs defined above
 
+    if isDepthCameraConnected == True:
         q2 = device.getOutputQueue(name="depth", maxSize=1, blocking=False)
 
-        passiveMode = depthTable.getBooleanTopic("passive").subscribe(False)
-        passiveModeOn = False
-        passiveTopic = depthTable.getRawTopic("passive-data").publish("byte array")
-        
-        runCommandSub = depthTable.getBooleanTopic("Trajectory Request").subscribe(False)
-        runCommandSet = depthTable.getBooleanTopic("Trajectory Request").publish()
-        runEndPosSub = depthTable.getDoubleArrayTopic("Trajectory End Point").subscribe([0,0,0])
-        
-        informFinishedCommandSet = depthTable.getBooleanTopic("Trajectory Request Fulfilled").publish()
-        
-        resultStream = depthTable.getDoubleArrayTopic("Trajectory Data").publish()
-        robotPositionSub = robotTable.getDoubleArrayTopic("Position").subscribe([0.0,0.0,0.0])
-        # commandStream
+    passiveMode = depthTable.getBooleanTopic("passive").subscribe(False)
+    passiveModeOn = False
+    passiveTopic = depthTable.getRawTopic("passive-data").publish("byte array")
+    
+    runCommandSub = depthTable.getBooleanTopic("Trajectory Request").subscribe(False)
+    runCommandSet = depthTable.getBooleanTopic("Trajectory Request").publish()
+    runEndPosSub = depthTable.getDoubleArrayTopic("Trajectory End Point").subscribe([0,0,0])
+    
+    informFinishedCommandSet = depthTable.getBooleanTopic("Trajectory Request Fulfilled").publish()
+    
+    resultStream = depthTable.getDoubleArrayTopic("Trajectory Data").publish()
+    robotPositionSub = robotTable.getDoubleArrayTopic("Position").subscribe([0.0,0.0,0.0])
+    # commandStream
 
-        updateIteration = 0
+    updateIteration = 0
 
-        logger.info("Starting camera stream")
-        while True:
+    logger.info("Starting camera stream")
+    while True:
+        if isDepthCameraConnected == True:
             inDepth = q2.get()
             depthFrame = inDepth.getFrame() #gets numpy array of depths per each pixel
             logger.info("Line 229, processing frame")
@@ -233,21 +251,25 @@ if __name__ == "__main__":
                 output.putFrame(finalMap )
                 logger.info("sent image to camera server")
 
-            # socket_info = clientsocket.recv(1024).decode("utf-8")
-            # command = socket_info.strip().replace("\x00\x0f","").split(" ")
-            # print(command)
+        # socket_info = clientsocket.recv(1024).decode("utf-8")
+        # command = socket_info.strip().replace("\x00\x0f","").split(" ")
+        # print(command)
 
-            #format: "RUN ROBOTPOSX ROBOTPOSY HEADING"
-            if runCommandSub.get() == True:
-                runCommandSet.set(False)
-                informFinishedCommandSet.set(False)
-                logger.info("Fetching depth camera data")
-                robotPos = robotPositionSub.get() #posx, posy, angle
-                endPos = runEndPosSub.get()
-                logger.info("Current robot position: " + str(robotPos))
+        #format: "RUN ROBOTPOSX ROBOTPOSY HEADING"
+        if runCommandSub.get() == True:
+            runCommandSet.set(False)
+            informFinishedCommandSet.set(False)
+            logger.info("Fetching depth camera data")
+            robotPos = robotPositionSub.get() #posx, posy, angle
+            endPos = runEndPosSub.get()
+            logger.info("Current robot position: " + str(robotPos))
 
-                angle = robotPos[2]
-                original_angle = 180
+            angle = robotPos[2]
+            original_angle = 180
+            robotStartPosPixel = convertRobotPoseToPixel((robotPos[0],robotPos[1]))
+            robotEndPosPixel = convertRobotPoseToPixel((endPos[0], endPos[1]))
+
+            if isDepthCameraConnected:
                 finalMap = rotate_CV(finalMap, angle, cv2.INTER_LINEAR)
                 maxSize = 640
                 camX = np.floor(np.cos((original_angle+angle) * np.pi/180) * maxSize/2) + finalMap.shape[1]//2
@@ -256,56 +278,56 @@ if __name__ == "__main__":
                 camY = int(camY)
                 # cv2.circle(finalMap, (camX,camY), 5, 255)
                 logger.info("Got cam pos")
-                
-                robotStartPosPixel = (robotPos[0],robotPos[1])
-                robotStartPosPixel = convertRobotPoseToPixel(robotStartPosPixel)
-                robotEndPosPixel = (endPos[0], endPos[1])
-                robotEndPosPixel = convertRobotPoseToPixel(robotEndPosPixel)
+            
                 rowShifted = row - robotStartPosPixel[1] + camY
                 colShifted = col - robotStartPosPixel[0] + camX #robotStartPosPixel[1] 
+                
                 rowShifted = rowShifted.astype('int32')
                 colShifted = colShifted.astype('int32')
-                rowShifted[rowShifted >= finalMap.shape[0]] = 0
-                colShifted[colShifted >= finalMap.shape[1]] = 0
-                rowShifted[rowShifted <= 0] = 0
-                colShifted[colShifted <= 0] = 0
-                rowShifted[colShifted <= 0] = 0
-                colShifted[rowShifted <= 0] = 0
+                
+                invalid_indices = (rowShifted < 0) | (rowShifted >= finalMap.shape[0]) | \
+                                (colShifted < 0) | (colShifted >= finalMap.shape[1])
+                
+                rowShifted[invalid_indices] = 0
+                colShifted[invalid_indices] = 0
+                
                 finalMap[0,0] = 0
                 finalMap = cv2.dilate(finalMap, kernel2, iterations=1).astype(finalMap.dtype)
                 logger.info("Got final map")
-                
-                
-                newImg = img + finalMap[rowShifted,colShifted]
-                newImg[newImg > 0.5] = 255
-                newImg[newImg < 0.5] = 0
-
-                # coloredImg = cv2.cvtColor(newImg.astype('float32'),cv2.COLOR_GRAY2BGR)
-                
-                logger.info("Starting ASTAR")
-                logger.info("Robot start pos: " + str(robotStartPosPixel))
-                logger.info("Robot end pos: " + str(robotEndPosPixel))
-
-                output.putFrame(newImg)
-                result = AStar.AStar(robotStartPosPixel,robotEndPosPixel,newImg)
-                # for i in range(len(result) -1):
-                #     # displayImg[convertToImageCordinate(result[i])] = (255,0,255)
-                #     line = cv2.line(coloredImg, result[i], result[i+1], (255,0,255), 2)
-                
-                
-                logger.info("Sending results")
-                logger.debug(result)
-                finalResult = []
-                if result != "FAILED":
-                    result = np.array(result).astype(np.float64)
-                    result = np.flip(result,0) #because AStar reconstruction starts from the end to the start, flip array to be start to end
-                    result = convertPixelToRobotPose(result)
-                    finalResult = list(result.ravel())
-                
-                resultStream.set(finalResult)
-                informFinishedCommandSet.set(True)
-                logger.info("Finished run")
-    # sys.stdout.close()
             
+            if isDepthCameraConnected:
+                newImg = img + finalMap[rowShifted,colShifted]
+            else:
+                newImg = img
+                
+            newImg = np.where(newImg > 0.5, 255, 0).astype(np.uint8)
+
+            # coloredImg = cv2.cvtColor(newImg.astype('float32'),cv2.COLOR_GRAY2BGR)
+            
+            logger.info("Starting ASTAR")
+            logger.info("Robot start pos: " + str(robotStartPosPixel))
+            logger.info("Robot end pos: " + str(robotEndPosPixel))
+
+            output.putFrame(newImg)
+            result = AStar.AStar(robotStartPosPixel,robotEndPosPixel,newImg)
+            # for i in range(len(result) -1):
+            #     # displayImg[convertToImageCordinate(result[i])] = (255,0,255)
+            #     line = cv2.line(coloredImg, result[i], result[i+1], (255,0,255), 2)
+            
+            
+            logger.info("Sending results")
+            logger.debug(result)
+            finalResult = []
+            if result != "FAILED":
+                result = np.array(result).astype(np.float64)
+                result = np.flip(result,0) #because AStar reconstruction starts from the end to the start, flip array to be start to end
+                result = convertPixelToRobotPose(result)
+                finalResult = list(result.ravel())
+            
+            resultStream.set(finalResult)
+            informFinishedCommandSet.set(True)
+            logger.info("Finished run")
+# sys.stdout.close()
         
-        
+    
+    

@@ -144,11 +144,9 @@ class DepthCameraProcessing:
         scaleX = depthCameraConfig.metersToPixelScaleX    #how much to scale on birds eye view image
         scaleY = depthCameraConfig.metersToPixelScaleY    #how much to scale on birds eye view image
 
-        logger.info("before distance")
         relativeDistFromCamera = depthCalc #how far away from camera
         relativePerpendicularFromCamera = depthCalc * self.tanHorizontalTheta #how much to the side
         distance = depthCalc * self.normalDistance  #np.sqrt((relativeDistFromCamera * relativeDistFromCamera) + (relativePerpendicularFromCamera * relativePerpendicularFromCamera)) #distance from camera focal point
-        logger.info("after distance")
 
         depthCalc[depthCalc > 4] = 0  #gaussian_filter(depthCalc[depthCalc > 4], sigma=3)
 
@@ -163,13 +161,11 @@ class DepthCameraProcessing:
         newX[height < -heightFromFloor ] = 0 
         newY[height < -heightFromFloor ] = 0 
 
-        logger.info("before ruound")
         newX = (newX.ravel() * scaleX).astype(np.int32)
         newY = (newY.ravel() * scaleY).astype(np.int32)
         
         #newX = np.round(newX * scaleX).ravel().astype(np.int32) #converts 2d array of newX cordinates to a 1D array, used to tranverse the newMap array one
         #newY = np.round(newY * scaleY).ravel().astype(np.int32) #^^^
-        logger.info("after ruound")
         
         newX[newX < 0 ] = 0
         newX[newX >= 640] = 0

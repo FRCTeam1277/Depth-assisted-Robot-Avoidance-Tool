@@ -2,7 +2,7 @@ import numpy as np
 discreteGrid = 5
 
 def dist(start, end):
-    return np.power((start[0] - end[0])**2 + (start[1]-end[1])**2, 0.5)
+    return np.linalg.norm(end-start)
     
 
 def reconstructPath(came_from, current_node):
@@ -15,17 +15,17 @@ def reconstructPath(came_from, current_node):
     
 def getNeighboringTuples(node, binaryImage):
     neighboringTuples = []
-    for i in [-discreteGrid,0,discreteGrid]:
-        for j in [-discreteGrid,0,discreteGrid]:
-            if i != 0 or j != 0:
-                new_node = (node[0] + i, node[1] + j)
-                if binaryImage[convertToImageCordinate(new_node)] == 0:
-                    neighboringTuples.append(new_node)
+    for offset in neighboring_offsets:
+        new_node = (node[0] + offset[0], node[1] + offset[1])
+        if binaryImage[convertToImageCordinate(new_node)] == 0:
+            neighboringTuples.append(new_node)
     return neighboringTuples
 
 def convertToImageCordinate(cord):
-    return (cord[1], cord[0])
+    return [cord[1], cord[0]]
 
+neighboring_offsets = [(i, j) for i in [-discreteGrid, 0, discreteGrid]
+                        for j in [-discreteGrid, 0, discreteGrid] if not (i == 0 and j == 0)]
 
 def AStar(start, end, binaryImg):
     binaryImage = binaryImg
