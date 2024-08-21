@@ -50,11 +50,11 @@ def __getNeighboringTuples(node, binary_image, options:AStarOptions):
     """Gets next set of cordinates to look through
 
     Args:
-        node (_type_): _description_
-        binaryImage (_type_): image of where the robot can go, a pixel being 0/black = free space, a pixel being 1/white = blocked
+        node (numpy [y,x]): gets current robot position
+        binaryImage ([int,int,int]): image of where the robot can go, a pixel being 0/black = free space, a pixel being 1/white = blocked
 
     Returns:
-        _type_: _description_
+        (x,y): neighboring pixels in image cordinates
     """
     neighboringTuples = []
     for offset in options.neighboring_offsets:
