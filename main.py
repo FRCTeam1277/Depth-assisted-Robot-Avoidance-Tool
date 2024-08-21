@@ -147,27 +147,27 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
     isDepthCameraConnected = False
     logger.info("Starting depth camera")
     try:
-        depthCameraConfig = rd.DepthCameraConfig()
-        depthCamera = rd.DepthCamera(depthCameraConfig)
-        depthCameraProcessing = rd.DepthCameraProcessing()
-        depthCamera.startDepthCamera(depthCameraConfig)
+        depth_camera_config = rd.DepthCameraConfig()
+        depth_camera = rd.DepthCamera(depth_camera_config)
+        depth_camera_processor = rd.DepthCameraProcessing(depth_camera_config)
+        depth_camera.startDepthCamera(depth_camera_config)
         isDepthCameraConnected = True
     except:
         isDepthCameraConnected = False
     
     
-    kernel = np.ones((25, 25), np.uint8) #approx half the robot length
-    kernel2 = np.ones((3,3), np.uint8)
+    robot_padding_kernel = np.ones((25, 25), np.uint8) #approx half the robot length #TODO make variable
+    depth_camera_padding_kernel = np.ones((3,3), np.uint8)
     
     #since our trajectories are based off of the path of the center of the robot, we need to make sure the robot will be able to 
     #drive the path we generate for it
     #Thus we must pad all the borders by half of the robot length to ensure it can get around with the paths we give it
-    binary_image = cv2.dilate(binary_image, kernel, iterations=1) 
+    binary_image = cv2.dilate(binary_image, robot_padding_kernel, iterations=1) 
 
     logger.info("Starting depth camera pipeline")
     if isDepthCameraConnected:
         try:
-            device = dai.Device(depthCamera.pipeline)
+            device = dai.Device(depth_camera.pipeline)
         except:
             isDepthCameraConnected = False
     
@@ -205,17 +205,17 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
         if isDepthCameraConnected == True:
             
             #Start of getting the birds eye view map
-            inDepth = disparityOutputQueue.get()
-            depthFrame = inDepth.getFrame() #gets numpy array of depths per each pixel
-            logger.info("Line 229, processing frame")
-            newMap = depthCameraProcessing.processDepthFrame(depthFrame, depthCameraConfig)
-            logger.info("Line 231, got processed frame, adding to buffer")
+            depth_channel = disparityOutputQueue.get()
+            depth_frame = depth_channel.getFrame() #gets numpy array of depths per each pixel
+            logger.info("Processing depth frame")
+            raw_bird_eye_view_map = depth_camera_processor.processDepthFrame(depth_frame, depth_camera_config)
+            logger.info("Got raw bird eye view map, adding to buffer")
 
-            depthCameraProcessing.addToBuffer(newMap)
-            logger.info("Line 234, Added to buffer, getting frame collective")
+            depth_camera_processor.addToBuffer(raw_bird_eye_view_map)
+            logger.info("Frame added to buffer, getting product of all frames")
             
             #Gets bird eye view of what is in front of the robot from the depth camera!
-            bird_eye_view_map = depthCameraProcessing.getGuaranteedDepth() 
+            bird_eye_view_map = depth_camera_processor.getGuaranteedDepth() 
 
             #constantly checks if passive mode is activated by user on the driver station
             shuffleBoard_update_ticker +=1
@@ -260,7 +260,7 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
                 #X - - - -  -       X is our camera
                 #  \
                 bird_eye_view_map = rotate_CV(bird_eye_view_map, angle_degrees, cv2.INTER_LINEAR) 
-                maxSize = 640 #TODO!!!!! FIX/make variable
+                maxSize = max(depth_camera_config.camera_width_pixels, depth_camera_config.camera_height_pixels)
                 
                 #calculating where the camera position is now in our new rotated map. We will use this to help overlay
                 #this map onto the prebaked field map
@@ -293,7 +293,7 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
                 bird_eye_view_map[0,0] = 0 
                 
                 #blends the enter map
-                bird_eye_view_map = cv2.dilate(bird_eye_view_map, kernel2, iterations=1).astype(bird_eye_view_map.dtype)
+                bird_eye_view_map = cv2.dilate(bird_eye_view_map, depth_camera_padding_kernel, iterations=1).astype(bird_eye_view_map.dtype)
                 logger.info("Got final map")
             
                 #adds the depth camera output if we have a depth camera
@@ -336,9 +336,9 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
             logger.info("Finished run")
         
     
-#runs at start of raspberry pi
+#runs during raspberry pi boot sequence (power on)
 if __name__ == "__main__":
-    #gets from pathweaver
+    #get from pathweaver
     img_config = {"top-left": [
         150,
         79

@@ -3,16 +3,21 @@
 import cv2
 import depthai as dai
 import numpy as np
-# import rerun as rr
 from scipy import ndimage
 from scipy.ndimage.filters import gaussian_filter
 import logging
 logger = logging.getLogger()
+
 class DepthCamera:
     def __init__(self, depthCameraConfig):
         self._birdsEyeViewMap = []
     
     def startDepthCamera(self, depthCameraConfig): 
+        """Creates pipeline for camera
+
+        Args:
+            depthCameraConfig (_type_): _description_
+        """
         # Create pipeline
         self.pipeline = dai.Pipeline()
 
@@ -21,7 +26,6 @@ class DepthCamera:
         monoRight = self.pipeline.create(dai.node.MonoCamera)
         depth = self.pipeline.create(dai.node.StereoDepth)
         xoutDepth = self.pipeline.create(dai.node.XLinkOut)
-
 
         xoutDepth.setStreamName("depth")
 
@@ -33,7 +37,7 @@ class DepthCamera:
 
         # Create a node that will produce the depth map (using disparity output as it's easier to visualize depth this way)
         depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
-        # Options: MEDIAN_OFF, KERNEL_3x3, KERNEL_5x5, KERNEL_7x7 (default)
+        
         depth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
 
         depth.setLeftRightCheck(depthCameraConfig.lr_check)
@@ -64,12 +68,10 @@ class DepthCamera:
    
         
     def runCamera(self, depthCameraProcessing, depthCameraConfig):
-        
         # Connect to device and start pipeline
         with dai.Device(self.pipeline) as device:
 
             # Output queue will be used to get the disparity frames from the outputs defined above
-
             q2 = device.getOutputQueue(name="depth", maxSize=1, blocking=False)
 
             while True:
@@ -116,20 +118,27 @@ class DepthCameraConfig:
         #add windows for debugging
         self.DEBUG = True
         #scale used to convert meters to a pixel array (important to set before as there is rounding error)
-        self.metersToPixelScaleX = 170//4
+        self.metersToPixelScaleX = 170//4 #Todo Figure out how these values were obtained
         self.metersToPixelScaleY = 170//4
-        self.heightFromFloor = 0.5 #meters
+        self.height_from_floor_meters = 0.5 #meter cut off, also used for the ceiling
+        
+        self.camera_width_pixels = 640
+        self.camera_height_pixels = 480
 
 class DepthCameraProcessing:
-    def __init__(self):
+    def __init__(self, depthCameraConfig:DepthCameraConfig):
+        """Class that will compute birds eye view
+        """
+        ##VV all are constants or prebaked constants, so during run time we do minimal computations
+        ##This saves A LOT of time!! Made the camera go from like 4 fps to 16ish
         self.focalLength = 1.3 * 1e-3 #1.3 mm
-        self.lensLength = (3*1e-9 * 640, 3*1e-9 * 480)
-        self.horizontalPixelLoc = (np.indices((480,640))[1] - 320 * np.ones((480,640))) * 3e-6 
+        self.lensLength = (3*1e-9 * depthCameraConfig.camera_width_pixels, 3*1e-9 * depthCameraConfig.camera_height_pixels)
+        self.horizontalPixelLoc = (np.indices((depthCameraConfig.camera_height_pixels,depthCameraConfig.camera_width_pixels))[1] - depthCameraConfig.camera_width_pixels/2 * np.ones((depthCameraConfig.camera_height_pixels,depthCameraConfig.camera_width_pixels))) * 3e-6 
         self.horizontalTheta = np.arctan(self.horizontalPixelLoc / self.focalLength)
         self.tanHorizontalTheta = np.tan(self.horizontalTheta) #ok ... don't judge, don't want to risk breaking anything
         self.tanHorizontalThetaSquared = self.tanHorizontalTheta * self.tanHorizontalTheta 
         self.normalDistance = np.sqrt(1+ self.tanHorizontalThetaSquared)
-        self.verticalPixelLoc = -1 * (np.indices((480,640))[0] - 240 * np.ones((480,640))) * 3e-6 
+        self.verticalPixelLoc = -1 * (np.indices((depthCameraConfig.camera_height_pixels,depthCameraConfig.camera_width_pixels))[0] - depthCameraConfig.camera_height_pixels/2 * np.ones((depthCameraConfig.camera_height_pixels,depthCameraConfig.camera_width_pixels))) * 3e-6 
         self.verticalTheta =  np.arctan(self.verticalPixelLoc/np.sqrt(self.horizontalPixelLoc * self.horizontalPixelLoc + self.focalLength * self.focalLength))
         self.tanVerticalTheta = np.tan(self.verticalTheta)
         
@@ -138,9 +147,18 @@ class DepthCameraProcessing:
         self.imageBufferArray = [None] * (self.bufferSize)
 
          
-    def processDepthFrame(self, depthFrame, depthCameraConfig):
+    def processDepthFrame(self, depthFrame, depthCameraConfig:DepthCameraConfig):
+        """Creates an initial birds eye view map based off of a depth frame
+
+        Args:
+            depthFrame ([int,int, float]): Depth camera frame (POV is the camera)
+            depthCameraConfig (DepthCameraConfig): config of our camera
+
+        Returns:
+            [int,int,bool]: raw depth image (better to use getGuaranteedDepth though!)
+        """
         depthCalc = depthFrame /1000  #converts depth from mm to meters
-        heightFromFloor = depthCameraConfig.heightFromFloor
+        height_from_floor_meters = depthCameraConfig.height_from_floor_meters
         scaleX = depthCameraConfig.metersToPixelScaleX    #how much to scale on birds eye view image
         scaleY = depthCameraConfig.metersToPixelScaleY    #how much to scale on birds eye view image
 
@@ -150,16 +168,16 @@ class DepthCameraProcessing:
 
         depthCalc[depthCalc > 4] = 0  #gaussian_filter(depthCalc[depthCalc > 4], sigma=3)
 
-        newMap = np.empty((480,640)) 
+        newMap = np.empty((depthCameraConfig.camera_height_pixels,depthCameraConfig.camera_width_pixels)) 
         newX = relativeDistFromCamera 
-        newY =  (relativePerpendicularFromCamera ) + 240/scaleY #+480/scale puts on the left side center
+        newY =  (relativePerpendicularFromCamera ) + depthCameraConfig.camera_height_pixels/scaleY #+480/scale puts on the left side center
 
         height =  distance * self.tanVerticalTheta #height relative to camera (offset to the y axis)
 
-        newX[height > 1- heightFromFloor ] = 0 #removes floor and ceiling from birdseye view
-        newY[height > 1 - heightFromFloor ] = 0 
-        newX[height < -heightFromFloor ] = 0 
-        newY[height < -heightFromFloor ] = 0 
+        newX[height > 1- height_from_floor_meters ] = 0 #removes floor and ceiling from birdseye view
+        newY[height > 1 - height_from_floor_meters ] = 0 
+        newX[height < -height_from_floor_meters ] = 0 
+        newY[height < -height_from_floor_meters ] = 0 
 
         newX = (newX.ravel() * scaleX).astype(np.int32)
         newY = (newY.ravel() * scaleY).astype(np.int32)
@@ -168,8 +186,8 @@ class DepthCameraProcessing:
         #newY = np.round(newY * scaleY).ravel().astype(np.int32) #^^^
         
         newX[newX < 0 ] = 0
-        newX[newX >= 640] = 0
-        newY[newY >= 480] = 0
+        newX[newX >= depthCameraConfig.camera_width_pixels] = 0
+        newY[newY >= depthCameraConfig.camera_height_pixels] = 0
         newY[newY < 0] = 0
         
         newMap[newY, newX] = 1 #if something was detected, set this pixel to white
@@ -177,6 +195,8 @@ class DepthCameraProcessing:
         return newMap
 
     def addToBuffer(self, newImage):
+        """Add a raw depth image to our buffer
+        """
         bufferIndex = self._bufferIndex
         self.imageBufferArray[bufferIndex] = newImage.copy()
         self.bufferIndex = bufferIndex + 1
@@ -184,11 +204,16 @@ class DepthCameraProcessing:
             bufferIndex = 0
 
     def getGuaranteedDepth(self):
+        """Gets a final map that is a product of all 5 images in the buffer
+        This ensures that if an object is detected, it must have been detected in all 5 images before
+        Other wise it is not reported.
+        Makes our results more guaranteed
+        """
         finalImage = self.imageBufferArray[0].copy()
         # return imageBufferArray[bufferIndex]
         for i in range(self.bufferSize- 1):
             if isinstance(self.imageBufferArray[1+i], np.ndarray):
-                finalImage = finalImage * self.imageBufferArray[1+i]
+                finalImage = finalImage * self.imageBufferArray[1+i] #if detected, we multiply by 1, if not, by 0
         return finalImage
 
 if __name__ == "__main__":
@@ -196,7 +221,7 @@ if __name__ == "__main__":
     depthCameraConfig = DepthCameraConfig()
 
     depthCamera = DepthCamera(depthCameraConfig)
-    depthCameraProcessing = DepthCameraProcessing()
+    depthCameraProcessing = DepthCameraProcessing(depthCameraConfig)
 
     depthCamera.startDepthCamera(depthCameraConfig)
     depthCamera.runCamera(depthCameraProcessing,depthCameraConfig)
