@@ -34,15 +34,6 @@ def startLogToUSB(logger,usbLogFile,localLogFile):
 ## Conversion Tools
 def convertRobotPoseToPixel(currentPosition,bottom_left_field_meters, image_size_meters, field_size_meters, field_size_pixels):
     """Converts a robot's current position on the field (in meters) into pixel cordiantes on the bird eye view map
-    Args:
-        pos (_type_): current robot position on field
-        bottomLeftFieldMeters (_type_): _description_
-        imgSizeMeters (_type_): _description_
-        fieldSizeMeters (_type_): _description_
-        fieldInPixels (_type_): _description_
-
-    Returns:
-        _type_: _description_
     """
     #use top left and right, as well as image size, to determine locations
     currentPosition = (currentPosition[0] + bottom_left_field_meters[0],  image_size_meters[1] + (field_size_meters[1] - (currentPosition[1] +  bottom_left_field_meters[1])))
@@ -62,10 +53,12 @@ def feetToMeters(cord):
     return tuple(newTuple)
 
 #https://stackoverflow.com/questions/24318078/is-there-a-faster-way-to-rotate-a-large-rgba-image-than-scipy-interpolate-rotate
-def rotate_CV(image, angel, interpolation):
+def rotate_CV(image, angle, interpolation):
+    """Rotates an image around its center by an angle (CCW)
+    """
     h,w = image.shape[:2]
     cX,cY = (w//2,h//2)
-    M = cv2.getRotationMatrix2D((cX,cY),angel,1)
+    M = cv2.getRotationMatrix2D((cX,cY),angle,1)
     rotated = cv2.warpAffine(image,M , (w,h),flags=interpolation)
     return rotated
          
@@ -163,10 +156,13 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
         isDepthCameraConnected = False
     
     
-    kernel = np.ones((25, 25), np.uint8) #approx half the robot 
+    kernel = np.ones((25, 25), np.uint8) #approx half the robot length
     kernel2 = np.ones((3,3), np.uint8)
     
-    binary_image = cv2.dilate(binary_image, kernel, iterations=1)
+    #since our trajectories are based off of the path of the center of the robot, we need to make sure the robot will be able to 
+    #drive the path we generate for it
+    #Thus we must pad all the borders by half of the robot length to ensure it can get around with the paths we give it
+    binary_image = cv2.dilate(binary_image, kernel, iterations=1) 
 
     logger.info("Starting depth camera pipeline")
     if isDepthCameraConnected:
@@ -201,12 +197,14 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
     resultStream = table_depth.getDoubleArrayTopic("Trajectory Data").publish()
     robotPositionSub = table_robot.getDoubleArrayTopic("Position").subscribe([0.0,0.0,0.0])
 
-    updateIteration = 0
+    shuffleBoard_update_ticker = 0
 
     #RUNS A* AND CAMERA LOOP
     logger.info("Starting camera stream")
     while True:
         if isDepthCameraConnected == True:
+            
+            #Start of getting the birds eye view map
             inDepth = disparityOutputQueue.get()
             depthFrame = inDepth.getFrame() #gets numpy array of depths per each pixel
             logger.info("Line 229, processing frame")
@@ -216,14 +214,13 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
             depthCameraProcessing.addToBuffer(newMap)
             logger.info("Line 234, Added to buffer, getting frame collective")
             
-            #bird eye view of what is in front of the robot
+            #Gets bird eye view of what is in front of the robot from the depth camera!
             bird_eye_view_map = depthCameraProcessing.getGuaranteedDepth() 
-            # finalMap = ndimage.binary_dilation(finalMap, iterations=1).astype(finalMap.dtype)
 
             #constantly checks if passive mode is activated by user on the driver station
-            updateIteration +=1
-            if updateIteration > 10:
-                updateIteration = 0
+            shuffleBoard_update_ticker +=1
+            if shuffleBoard_update_ticker > 10:
+                shuffleBoard_update_ticker = 0
                 passiveModeOn = passiveMode.get()
                 
             logger.info("Ran Loop Iteration")
@@ -239,18 +236,18 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
         #to actively avoid obsticles, send run command via network table constantly!
         #format: "RUN ROBOTPOSX ROBOTPOSY HEADING"
         if runCommandSub.get() == True:
-            #tells drive station that we are intalizing this function
+            #tells drive station that we are initalizing this function
             runCommandSet.set(False)
             informFinishedCommandSet.set(False)
             logger.info("Fetching depth camera data")
             
             #gets data from network table of where we are and where to go
-            robotPos = robotPositionSub.get() #posx, posy, angle
+            robotPos = robotPositionSub.get() #Fromat is: [posx, posy, angle]
             endPos = runEndPosSub.get()
             logger.info("Current robot position: " + str(robotPos))
 
-            angle = robotPos[2]
-            original_angle = 180 #??
+            angle_degrees = robotPos[2]
+            original_angle_degrees = 180 #see below. Since our bird eye view has the pinhole on the left looking out to the right, we are at the 180 degree angle by default on the unit circle
             
             #converts meter positions to pixel ones
             robotStartPosPixel = convertRobotPoseToPixel((robotPos[0],robotPos[1]), bottom_left_field_position_meters, image_size_meters, field_size_meters,field_size_pixels)
@@ -262,18 +259,22 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
                 #  /
                 #X - - - -  -       X is our camera
                 #  \
-                bird_eye_view_map = rotate_CV(bird_eye_view_map, angle, cv2.INTER_LINEAR) 
-                maxSize = 640
+                bird_eye_view_map = rotate_CV(bird_eye_view_map, angle_degrees, cv2.INTER_LINEAR) 
+                maxSize = 640 #TODO!!!!! FIX/make variable
                 
                 #calculating where the camera position is now in our new rotated map. We will use this to help overlay
                 #this map onto the prebaked field map
-                camX = np.floor(np.cos((original_angle+angle) * np.pi/180) * maxSize/2) + bird_eye_view_map.shape[1]//2
-                camY = -np.floor(np.sin((original_angle+angle) * np.pi/180) * maxSize/2) + bird_eye_view_map.shape[0]//2
+                
+                #For the math specifically, think of it as selecting the cordinate on the unit circle around the center of the image
+                # We are adding two vectors, from the origin to the center of the image, then from the center to the image to a point on the circle
+                # The second vector specifically has magnitude being the radius of the circle (maxsize/2)   
+                camX = np.floor(np.cos((original_angle_degrees+angle_degrees) * np.pi/180) * maxSize/2) + bird_eye_view_map.shape[1]//2
+                camY = -np.floor(np.sin((original_angle_degrees+angle_degrees) * np.pi/180) * maxSize/2) + bird_eye_view_map.shape[0]//2
                 camX = int(camX)
                 camY = int(camY)
                 logger.info("Got cam position")
             
-                #shifts row indicies based off of camera position (i.e. )
+                #shifts row indicies based off of camera position
                 #This makes it such that bird_eye_view_map[rowShifted,colShifted] aligns exactly with the current robot position
                 #Essentially we are translating the indicies of the bird eye view map to that on the field map
                 rowShifted = row_array - robotStartPosPixel[1] + camY
@@ -291,7 +292,7 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
                 colShifted[invalid_indices] = 0
                 bird_eye_view_map[0,0] = 0 
                 
-                
+                #blends the enter map
                 bird_eye_view_map = cv2.dilate(bird_eye_view_map, kernel2, iterations=1).astype(bird_eye_view_map.dtype)
                 logger.info("Got final map")
             
@@ -310,6 +311,7 @@ def run(usbLogFile,localLogFile,team, image_field_config, image_scale = 0.25, di
             logger.info("Robot start pos: " + str(robotStartPosPixel))
             logger.info("Robot end pos: " + str(robotEndPosPixel))
 
+            #sends the shuffleboard the current binary map
             depthCameraViewOutput.putFrame(new_binary_image)
             result = AStar.execute(robotStartPosPixel,robotEndPosPixel,new_binary_image, astar_options)
             
