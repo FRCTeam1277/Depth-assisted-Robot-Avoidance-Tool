@@ -8,7 +8,7 @@ import ntcore
 import numpy as np
 from cscore import CameraServer
 
-import AStarPython as AStar
+import AStar
 import robotDetection as rd
 from AStarPython import AStarOptions
 
