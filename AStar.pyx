@@ -5,8 +5,6 @@
 """
 import numpy as np
 
-print("WARNING RUNNING PYHON")
-
 class AStarOptions():
     """Stores all options for A* Algorithm
     """
