@@ -8,10 +8,9 @@ import ntcore
 import numpy as np
 from cscore import CameraServer
 
-import AStar
+import AStar #should import c library, but will use python as backup
 import robotDetection as rd
-from AStarPython import AStarOptions
-
+from AStar import AStarOptions
 
 # Logging Tools
 def startLogToUSB(logger, usb_log_file_path, local_log_file_path):
