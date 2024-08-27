@@ -4,8 +4,6 @@ Run this on the raspberry pi to have it built properly!
 """
 from setuptools import setup
 from Cython.Build import cythonize
-import Cython.Compiler.Options
-Cython.Compiler.Options.annotate = True
 
 setup(
     name = "AStar",
