@@ -48,6 +48,15 @@ The script was also running on an overclocked raspberry pi. This isn't really ne
 
 Lastly, sure main.py has you're configured parameters. In the future an update should be made to accept command line parameters to move the arguments outside the script!
 
+## Set Up
+These files should all be on the raspberry PI.
+
+On the raspberry PI, make sure to run `python AStarSetup.py build_ext --inplace` to generate the AStar.c file with the unix system (this can not be done on the windows computer).
+
+Then ensure that parameters are set in the main.py, and all the hardware is correctly connected. Also ensure that you have set up the script to auto run and to have the usb mounted if you want.
+
+You should be able to then run the main.py script!
+
 ## Examples
 I did not get any video of this working on the actual robot (oops) but this is what it looked like during development.
 
